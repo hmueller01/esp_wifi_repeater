@@ -3534,7 +3534,7 @@ static void ICACHE_FLASH_ATTR web_config_client_connected_cb(void *arg)
 
     if (!config.locked)
     {
-        static const uint8_t config_page_str[] ICACHE_RODATA_ATTR STORE_ATTR = WEB_HEADER CONFIG_PAGE;
+        static const uint8_t config_page_str[] ICACHE_RODATA_ATTR STORE_ATTR = CONFIG_PAGE;
         uint32_t slen = (sizeof(config_page_str) + 4) & ~3;
         // uint8_t *config_page = (char *)os_malloc(slen);
         // if (config_page == NULL)
