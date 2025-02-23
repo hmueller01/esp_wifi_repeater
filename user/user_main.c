@@ -137,6 +137,14 @@ void ICACHE_FLASH_ATTR mac_2_buff(char *buf, uint8_t mac[6])
                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
+// buf should be at least 21 chars to represent "12345 days, 23:59:59"
+char * ICACHE_FLASH_ATTR get_uptime_string(char *buf)
+{
+    uint32_t time = (uint32_t)(get_long_systime() / 1000000);
+    os_sprintf(buf, "%d days, %d:%02d:%02d", time / 86400, (time % 86400) / 3600, (time % 3600) / 60, time % 60);
+    return buf;
+}
+
 #if MQTT_CLIENT
 
 #define MQTT_TOPIC_RESPONSE 0x0001
@@ -1452,11 +1460,9 @@ void ICACHE_FLASH_ATTR console_handle_command(struct espconn *pespconn)
 
         if (nTokens == 2 && strcmp(tokens[1], "stats") == 0)
         {
-            uint32_t time = (uint32_t)(get_long_systime() / 1000000);
-            int16_t i;
-            enum phy_mode phy;
+            char buf[21]; // 12345 days, 23:59:59
 
-            os_sprintf(response, "System uptime: %d:%02d:%02d\r\n", time / 3600, (time % 3600) / 60, time % 60);
+            os_sprintf(response, "System uptime: %s\r\n", get_uptime_string(buf));
             to_console(response);
 #if DAILY_LIMIT
             uint32_t current_stamp = sntp_get_current_timestamp();
@@ -1482,7 +1488,7 @@ void ICACHE_FLASH_ATTR console_handle_command(struct espconn *pespconn)
             to_console(response);
 #endif
 #if PHY_MODE
-            phy = wifi_get_phy_mode();
+            enum phy_mode phy = wifi_get_phy_mode();
             os_sprintf(response, "Phy mode: %c\r\n", phy == PHY_MODE_11B ? 'b' : phy == PHY_MODE_11G ? 'g' : 'n');
             to_console(response);
 #endif
@@ -3508,7 +3514,6 @@ static void ICACHE_FLASH_ATTR web_config_client_sent_cb(void *arg)
 /* Called when a client connects to the web config */
 static void ICACHE_FLASH_ATTR web_config_client_connected_cb(void *arg)
 {
-
     struct espconn *pespconn = (struct espconn *)arg;
 
     //os_printf("web_config_client_connected_cb(): Client connected\r\n");
@@ -3529,22 +3534,38 @@ static void ICACHE_FLASH_ATTR web_config_client_connected_cb(void *arg)
 
     if (!config.locked)
     {
-        static const uint8_t config_page_str[] ICACHE_RODATA_ATTR STORE_ATTR = CONFIG_PAGE;
+        static const uint8_t config_page_str[] ICACHE_RODATA_ATTR STORE_ATTR = WEB_HEADER CONFIG_PAGE;
         uint32_t slen = (sizeof(config_page_str) + 4) & ~3;
-        uint8_t *config_page = (char *)os_malloc(slen);
-        if (config_page == NULL)
-            return;
-        os_memcpy(config_page, config_page_str, slen);
+        // uint8_t *config_page = (char *)os_malloc(slen);
+        // if (config_page == NULL)
+        //     return;
+        // os_memcpy(config_page, config_page_str, slen);
 
-        uint8_t *page_buf = (char *)os_malloc(slen + 200);
+        char buf[21]; // 12345 days, 23:59:59
+        uint8_t *page_buf = (uint8_t *)os_malloc(slen + 384);
         if (page_buf == NULL)
             return;
-            os_sprintf(page_buf, config_page_str, config.ssid, config.password, // TODO: does this work?
-                   config.automesh_mode != AUTOMESH_OFF ? "checked" : "",
-                   config.ap_ssid, config.ap_password,
-                   config.ap_open ? " selected" : "", config.ap_open ? "" : " selected",
-                   IP2STR(&config.network_addr));
-        os_free(config_page);
+        enum phy_mode phy = wifi_get_phy_mode();
+        uint8_t sta_ip[20];
+        struct netif *sta_nf = (struct netif *)eagle_lwip_getif(0);
+        addr2str(sta_ip, sta_nf->ip_addr.addr, sta_nf->netmask.addr);
+        os_sprintf(page_buf, config_page_str, config.ssid, config.password, // TODO: does this work?
+            config.automesh_mode != AUTOMESH_OFF ? "checked" : "",
+            config.ap_ssid, config.ap_password,
+            config.ap_open ? " selected" : "", config.ap_open ? "" : " selected",
+            IP2STR(&config.network_addr),
+            get_uptime_string(buf),
+            (uint32_t)(Bytes_in / 1024), Packets_in,
+            (uint32_t)(Bytes_out / 1024), Packets_out,
+            Vdd / 1000, Vdd % 1000,
+            phy == PHY_MODE_11B ? 'b' : phy == PHY_MODE_11G ? 'g' : 'n',
+            system_get_free_heap_size(),
+            sta_ip,
+            IP2STR(&sta_nf->gw),
+            wifi_station_get_rssi(),
+            config.ap_on ? wifi_softap_get_station_num() : 0
+        );
+        // os_free(config_page);
 
         espconn_send(pespconn, page_buf, os_strlen(page_buf));
 
