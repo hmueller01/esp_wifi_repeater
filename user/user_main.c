@@ -1279,7 +1279,7 @@ void ICACHE_FLASH_ATTR console_handle_command(struct espconn *pespconn)
         {
             os_sprintf(response, "Version %s (build: %s)\r\n", ESP_REPEATER_VERSION, __TIMESTAMP__);
             to_console(response);
-            os_sprintf(response, "SKD Version %s\r\n", system_get_sdk_version());
+            os_sprintf(response, "SDK Version %s\r\n", system_get_sdk_version());
             to_console(response);
 
             os_sprintf(response, "STA: SSID:%s PW:%s%s\r\n",
@@ -1456,7 +1456,7 @@ void ICACHE_FLASH_ATTR console_handle_command(struct espconn *pespconn)
             int16_t i;
             enum phy_mode phy;
 
-            os_sprintf(response, "System uptime: %d:%02d:%02d\r\n", time / 3600, (time % 3600) / 60, time % 60);
+            os_sprintf(response, "System uptime: %d days, %d:%02d:%02d\r\n", time / 86400, (time % 86400) / 3600, (time % 3600) / 60, time % 60);
             to_console(response);
 #if DAILY_LIMIT
             uint32_t current_stamp = sntp_get_current_timestamp();
