@@ -3503,12 +3503,43 @@ static void ICACHE_FLASH_ATTR web_config_client_discon_cb(void *arg)
     struct espconn *pespconn = (struct espconn *)arg;
 }
 
+#define MAX_PACKET_SIZE 1460  // ESP8266 TCP buffer limit
+uint8_t *page_buf = NULL;
+int page_buf_offset = 0;
+
+static void ICACHE_FLASH_ATTR espconn_send_packet(struct espconn *pespconn)
+{
+    int page_buf_len = (page_buf != NULL) ? os_strlen(page_buf) : page_buf_offset;
+    if (page_buf_offset >= page_buf_len)
+    {
+        os_printf("espconn_send_packet(): All data sent\r\n");
+        os_free(page_buf);
+        page_buf = NULL;
+        page_buf_offset = 0;
+        espconn_disconnect(pespconn);
+        return;
+    }
+
+    int remaining = page_buf_len - page_buf_offset;
+    int packet_size = remaining > MAX_PACKET_SIZE ? MAX_PACKET_SIZE : remaining;
+    os_printf("espconn_send_packet(): Sending packet_size: %d, remaining: %d\r\n", packet_size, remaining - packet_size);
+    sint8 result = espconn_send(pespconn, &page_buf[page_buf_offset], packet_size);
+    if (result == 0)
+    {
+        page_buf_offset += packet_size;
+    }
+    else
+    {
+        os_printf("espconn_send_packet(): espconn_send failed with code: %d\r\n", result);
+    }
+}
+
 static void ICACHE_FLASH_ATTR web_config_client_sent_cb(void *arg)
 {
-    //os_printf("web_config_client_sent_cb(): data sent to client\n");
+    //os_printf("web_config_client_sent_cb(): data sent to client\r\n");
     struct espconn *pespconn = (struct espconn *)arg;
 
-    espconn_disconnect(pespconn);
+    espconn_send_packet(pespconn);
 }
 
 /* Called when a client connects to the web config */
@@ -3516,7 +3547,14 @@ static void ICACHE_FLASH_ATTR web_config_client_connected_cb(void *arg)
 {
     struct espconn *pespconn = (struct espconn *)arg;
 
-    //os_printf("web_config_client_connected_cb(): Client connected\r\n");
+    os_printf("web_config_client_connected_cb(): Client connected\r\n");
+
+    // do not allow another connection while buffer is not fully sent (NULL)
+    if (page_buf != NULL)
+    {
+        os_printf("web_config_client_connected_cb(): Error. page_buf it not empty! Exit.\r\n");
+        return;
+    }
 
     if (!check_connection_access(pespconn, config.config_access))
     {
@@ -3532,58 +3570,92 @@ static void ICACHE_FLASH_ATTR web_config_client_connected_cb(void *arg)
     ringbuf_reset(console_rx_buffer);
     ringbuf_reset(console_tx_buffer);
 
+    char time_buf[21]; // "12345 days, 23:59:59" == 20 chars
+    get_uptime_string(time_buf);
+
+    int i;
+    struct dhcps_pool *p;
+    uint8_t *dhcp_buf = (uint8_t *)os_malloc(76 * MAX_DHCP + 1); // <tr><td>80:64:6f:54:79:a0</td><td>| 100.100.100.200</td><td>| 2846</td></tr>
+    if (dhcp_buf == NULL)
+        return;
+    dhcp_buf[0] = '\0';  // empty string
+    for (i = 0; (p = dhcps_get_mapping(i)) && i < MAX_DHCP; i++)
+    {
+        os_sprintf(dhcp_buf, "%s<tr><td>%02x:%02x:%02x:%02x:%02x:%02x</td><td>| " IPSTR "</td><td>| %d</td></tr>",
+            dhcp_buf,
+            p->mac[0], p->mac[1], p->mac[2], p->mac[3], p->mac[4], p->mac[5],
+            IP2STR(&p->ip), p->lease_timer);
+    }
+
+    enum phy_mode phy = wifi_get_phy_mode();
+    char phymode = phy == PHY_MODE_11B ? 'b' : phy == PHY_MODE_11G ? 'g' : 'n';
+    uint8_t sta_ip[20];
+    struct netif *sta_nf = (struct netif *)eagle_lwip_getif(0);
+    addr2str(sta_ip, sta_nf->ip_addr.addr, sta_nf->netmask.addr);
+
     if (!config.locked)
     {
         static const uint8_t config_page_str[] ICACHE_RODATA_ATTR STORE_ATTR = CONFIG_PAGE;
-        uint32_t slen = (sizeof(config_page_str) + 4) & ~3;
-        // uint8_t *config_page = (char *)os_malloc(slen);
-        // if (config_page == NULL)
-        //     return;
-        // os_memcpy(config_page, config_page_str, slen);
-
-        char buf[21]; // 12345 days, 23:59:59
-        uint8_t *page_buf = (uint8_t *)os_malloc(slen + 384);
+        size_t slen = ((sizeof(config_page_str) + 4) & ~3) + 768;
+        page_buf = (uint8_t *)os_malloc(slen);
         if (page_buf == NULL)
+        {
+            os_free(dhcp_buf);
             return;
-        enum phy_mode phy = wifi_get_phy_mode();
-        uint8_t sta_ip[20];
-        struct netif *sta_nf = (struct netif *)eagle_lwip_getif(0);
-        addr2str(sta_ip, sta_nf->ip_addr.addr, sta_nf->netmask.addr);
-        os_sprintf(page_buf, config_page_str, config.ssid, config.password, // TODO: does this work?
+        }
+        os_sprintf(page_buf, config_page_str, config.ssid, config.password,
             config.automesh_mode != AUTOMESH_OFF ? "checked" : "",
             config.ap_ssid, config.ap_password,
             config.ap_open ? " selected" : "", config.ap_open ? "" : " selected",
             IP2STR(&config.network_addr),
-            get_uptime_string(buf),
+            // WEB_STATUS
+            time_buf,
             (uint32_t)(Bytes_in / 1024), Packets_in,
             (uint32_t)(Bytes_out / 1024), Packets_out,
             Vdd / 1000, Vdd % 1000,
-            phy == PHY_MODE_11B ? 'b' : phy == PHY_MODE_11G ? 'g' : 'n',
+            phymode,
             system_get_free_heap_size(),
             sta_ip,
             IP2STR(&sta_nf->gw),
             wifi_station_get_rssi(),
-            config.ap_on ? wifi_softap_get_station_num() : 0
+            config.ap_on ? wifi_softap_get_station_num() : 0,
+            // WEB_DHCP_STATUS
+            config.dhcps_lease_time,
+            dhcp_buf
         );
-        // os_free(config_page);
-
-        espconn_send(pespconn, page_buf, os_strlen(page_buf));
-
-        os_free(page_buf);
+        os_printf("page_buf size=%d, len=%d\r\n", slen, os_strlen(page_buf));
+        espconn_send_packet(pespconn);
     }
     else
     {
         static const uint8_t lock_page_str[] ICACHE_RODATA_ATTR STORE_ATTR = LOCK_PAGE;
-        uint32_t slen = (sizeof(lock_page_str) + 4) & ~3;
-        uint8_t *lock_page = (char *)os_malloc(slen);
-        if (lock_page == NULL)
+        uint32_t slen = ((sizeof(lock_page_str) + 4) & ~3) + 768;
+        page_buf = (uint8_t *)os_malloc(slen);
+        if (page_buf == NULL)
+        {
+            os_free(dhcp_buf);
             return;
-        os_memcpy(lock_page, lock_page_str, slen);
-
-        espconn_send(pespconn, lock_page, sizeof(lock_page_str));
-
-        os_free(lock_page);
+        }
+        os_sprintf(page_buf, lock_page_str,
+            // WEB_STATUS
+            time_buf,
+            (uint32_t)(Bytes_in / 1024), Packets_in,
+            (uint32_t)(Bytes_out / 1024), Packets_out,
+            Vdd / 1000, Vdd % 1000,
+            phymode,
+            system_get_free_heap_size(),
+            sta_ip,
+            IP2STR(&sta_nf->gw),
+            wifi_station_get_rssi(),
+            config.ap_on ? wifi_softap_get_station_num() : 0,
+            // WEB_DHCP_STATUS
+            config.dhcps_lease_time,
+            dhcp_buf
+        );
+        os_printf("page_buf size=%d, len=%d\r\n", slen, os_strlen(page_buf));
+        espconn_send_packet(pespconn);
     }
+    os_free(dhcp_buf);
 }
 #endif /* WEB_CONFIG */
 
