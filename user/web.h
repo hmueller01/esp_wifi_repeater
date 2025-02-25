@@ -29,6 +29,14 @@
 </table>\
 "
 
+#define WEB_DHCP_STATUS "\
+<h2>DHCP Status</h2>\
+<table>\
+<tr><td>DHCP lease time:</td><td>%dmin</td></tr>\
+<tr><td>DHCP table:</td><td></td></tr>%s\
+</table>\
+"
+
 #define CONFIG_PAGE WEB_HEADER "\
 <script>\
 if (window.location.search.substr(1) != '')\
@@ -117,7 +125,7 @@ setTimeout(\"location.href = '/'\",10000);\
 </tr>\
 </table>\
 </form>\
-" WEB_STATUS WEB_FOOTER
+" WEB_STATUS WEB_DHCP_STATUS WEB_FOOTER
 
 #define LOCK_PAGE WEB_HEADER "\
 <script>\
@@ -142,7 +150,7 @@ setTimeout(\"location.href = '/'\",1000);\
 \
 </table>\
 <small>\
-<i>Default: STA password to unlock<br />\
+<i>Default: STA password to unlock</i><br />\
 </small>\
 </form>\
-" WEB_FOOTER
+" WEB_STATUS WEB_DHCP_STATUS WEB_FOOTER
