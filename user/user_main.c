@@ -3379,7 +3379,7 @@ static void ICACHE_FLASH_ATTR handle_set_cmd(void *arg, char *cmd, char *val)
         val[max_current_cmd_size] = '\0';
     }
     os_sprintf(cmd_line, "%s %s", cmd, val);
-    //os_printf("web_config_client_recv_cb(): cmd line:%s\n",cmd_line);
+    //os_printf("web_config_client_recv_cb(): cmd line:%s\r\n", cmd_line);
 
     ringbuf_memcpy_into(console_rx_buffer, cmd_line, os_strlen(cmd_line));
     console_handle_command(pespconn);
@@ -3507,16 +3507,21 @@ static void ICACHE_FLASH_ATTR web_config_client_discon_cb(void *arg)
 uint8_t *page_buf = NULL;
 int page_buf_offset = 0;
 
+static void ICACHE_FLASH_ATTR espconn_send_packet_end(struct espconn *pespconn)
+{
+    os_free(page_buf);
+    page_buf = NULL;
+    page_buf_offset = 0;
+    espconn_disconnect(pespconn);
+}
+
 static void ICACHE_FLASH_ATTR espconn_send_packet(struct espconn *pespconn)
 {
     int page_buf_len = (page_buf != NULL) ? os_strlen(page_buf) : page_buf_offset;
     if (page_buf_offset >= page_buf_len)
     {
         os_printf("espconn_send_packet(): All data sent\r\n");
-        os_free(page_buf);
-        page_buf = NULL;
-        page_buf_offset = 0;
-        espconn_disconnect(pespconn);
+        espconn_send_packet_end(pespconn);
         return;
     }
 
@@ -3531,6 +3536,7 @@ static void ICACHE_FLASH_ATTR espconn_send_packet(struct espconn *pespconn)
     else
     {
         os_printf("espconn_send_packet(): espconn_send failed with code: %d\r\n", result);
+        espconn_send_packet_end(pespconn);
     }
 }
 
